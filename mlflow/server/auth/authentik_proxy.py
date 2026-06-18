@@ -38,13 +38,14 @@ Authentik "Proxy outpost / forward auth (single application)" — see the
 
 from __future__ import annotations
 
+import base64
 import functools
 import ipaddress
 import logging
 import secrets
 from typing import TYPE_CHECKING
 
-from flask import Flask, g, make_response, request
+from flask import Flask, Response, g, make_response, request
 from starlette.requests import Request as StarletteRequest
 from werkzeug.datastructures import Authorization
 
@@ -56,6 +57,7 @@ from mlflow.environment_variables import (
     MLFLOW_AUTHENTIK_SHARED_SECRET_HEADER,
     MLFLOW_AUTHENTIK_TRUSTED_PROXY_IPS,
 )
+from mlflow.protos.databricks_pb2 import RESOURCE_ALREADY_EXISTS, ErrorCode
 from mlflow.server import app as _shared_flask_app
 from mlflow.server.asgi_utils import get_routed_asgi_path
 from mlflow.server.auth import (
@@ -216,9 +218,12 @@ def _ensure_managed_role(s: SqlAlchemyStore, name: str, permission: str) -> int:
     ``("workspace", "*")`` grant at ``permission`` (USE or MANAGE).
     Returns the role id.
 
-    Both the role creation and the workspace-wide permission insert are
-    treated as idempotent: a ``RESOURCE_ALREADY_EXISTS`` failure on either
-    is swallowed and the existing row is used.
+    Idempotency contract: if the role already exists with the correct
+    ``("workspace", "*")`` permission row this is a no-op.  If it exists
+    with a *different* workspace-wide permission (e.g. an operator
+    pre-created the role with ``MANAGE`` when the plugin would have used
+    ``USE``) the existing permission row is updated to the desired
+    value.  This self-heals external misconfigurations.
     """
     try:
         role = s.get_role_by_name(DEFAULT_WORKSPACE_NAME, name)
@@ -233,17 +238,30 @@ def _ensure_managed_role(s: SqlAlchemyStore, name: str, permission: str) -> int:
                 ),
             )
         except MlflowException as exc:
-            if getattr(exc, "error_code", None) != "RESOURCE_ALREADY_EXISTS":
+            if exc.error_code != ErrorCode.Name(RESOURCE_ALREADY_EXISTS):
                 raise
             role = s.get_role_by_name(DEFAULT_WORKSPACE_NAME, name)
-    # Ensure the workspace-wide permission row exists.  ``add_role_permission``
-    # raises ``RESOURCE_ALREADY_EXISTS`` when the row is already present —
-    # treat that as a successful no-op.
-    try:
-        s.add_role_permission(role.id, RESOURCE_TYPE_WORKSPACE, "*", permission)
-    except MlflowException as exc:
-        if getattr(exc, "error_code", None) != "RESOURCE_ALREADY_EXISTS":
-            raise
+    # Inspect the existing workspace-wide permission row.  If present at the
+    # wrong level, update it; if absent, add it.  This ensures the
+    # auto-managed role always carries exactly the ``(workspace, *, permission)``
+    # grant we want.
+    existing_perms = s.list_role_permissions(role.id)
+    workspace_perm = next(
+        (
+            p
+            for p in existing_perms
+            if p.resource_type == RESOURCE_TYPE_WORKSPACE and p.resource_pattern == "*"
+        ),
+        None,
+    )
+    if workspace_perm is None:
+        try:
+            s.add_role_permission(role.id, RESOURCE_TYPE_WORKSPACE, "*", permission)
+        except MlflowException as exc:
+            if exc.error_code != ErrorCode.Name(RESOURCE_ALREADY_EXISTS):
+                raise
+    elif workspace_perm.permission != permission:
+        s.update_role_permission(workspace_perm.id, permission)
     return role.id
 
 
@@ -271,7 +289,7 @@ def _jit_provision_and_reconcile(
         try:
             s.create_user(username, random_password, is_admin=is_admin)
         except MlflowException as exc:
-            if getattr(exc, "error_code", None) != "RESOURCE_ALREADY_EXISTS":
+            if exc.error_code != ErrorCode.Name(RESOURCE_ALREADY_EXISTS):
                 raise
             # Another concurrent request created the user between our
             # has_user() and create_user() calls.  Fall through and
@@ -368,7 +386,7 @@ def _g_cache_get():
     return getattr(g, "_authentik_auth_result", None)
 
 
-def authenticate_request_authentik_proxy() -> Authorization | object:
+def authenticate_request_authentik_proxy() -> Authorization | Response:
     """
     Flask ``before_request`` authorization function used by the
     ``authentik-auth`` app plugin.
@@ -463,8 +481,6 @@ def _authenticate_fastapi_request_authentik(request: StarletteRequest):
                 try:
                     scheme, credentials = auth.split(" ", 1)
                     if scheme.lower() == "basic":
-                        import base64
-
                         decoded = base64.b64decode(credentials).decode("ascii")
                         internal_username, _, internal_password = decoded.partition(":")
                         if secrets.compare_digest(internal_password, internal_token):

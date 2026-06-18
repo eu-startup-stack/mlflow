@@ -412,6 +412,29 @@ class TestReconciliation:
         roles = isolated_store.list_user_roles_for_workspace(user.id, DEFAULT_WORKSPACE_NAME)
         assert [r.name for r in roles] == ["user"]
 
+    def test_existing_managed_role_wrong_permission_is_corrected(self, auth_app, isolated_store):
+        # Pre-seed the "user" managed role but with the *wrong* workspace
+        # permission (MANAGE instead of USE).  The plugin must self-heal the
+        # permission row on first auth request — otherwise users in the
+        # ``mlflow-user`` group would silently inherit MANAGE.
+        user_role = isolated_store.create_role("user", DEFAULT_WORKSPACE_NAME)
+        isolated_store.add_role_permission(user_role.id, RESOURCE_TYPE_WORKSPACE, "*", MANAGE.name)
+        perms_before = isolated_store.list_role_permissions(user_role.id)
+        assert any(p.permission == MANAGE.name for p in perms_before)
+
+        headers, ctx = _trusted_headers(username="heal", groups="mlflow-user")
+        with auth_app.test_request_context("/", headers=headers, **ctx):
+            ap.authenticate_request_authentik_proxy()
+
+        perms_after = isolated_store.list_role_permissions(user_role.id)
+        workspace_perms = [
+            p
+            for p in perms_after
+            if p.resource_type == RESOURCE_TYPE_WORKSPACE and p.resource_pattern == "*"
+        ]
+        assert len(workspace_perms) == 1
+        assert workspace_perms[0].permission == USE.name
+
 
 # --- FastAPI auth test ------------------------------------------------------
 
