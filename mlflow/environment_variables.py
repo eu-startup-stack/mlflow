@@ -1595,3 +1595,38 @@ MLFLOW_SKIP_PIP_REQUIREMENTS_CHECK = _BooleanEnvironmentVariable(
 MLFLOW_READ_REPLICA_BACKEND_STORE_URI = _EnvironmentVariable(
     "MLFLOW_READ_REPLICA_BACKEND_STORE_URI", str, None
 )
+
+#: Comma-separated list of trusted proxy IPs and/or CIDR ranges for the
+#: ``authentik-auth`` app plugin. The MLflow server will only trust
+#: ``X-authentik-*`` proxy headers from these source addresses — any other
+#: peer is rejected (401) regardless of the headers it sends. ``"*"`` disables
+#: the check and trusts any peer (dangerous; only suitable for local
+#: development). (default: ``"127.0.0.1,::1"``)
+MLFLOW_AUTHENTIK_TRUSTED_PROXY_IPS = _EnvironmentVariable(
+    "MLFLOW_AUTHENTIK_TRUSTED_PROXY_IPS", str, "127.0.0.1,::1"
+)
+
+#: Optional shared secret expected in a request header (see
+#: ``MLFLOW_AUTHENTIK_SHARED_SECRET_HEADER``) when the ``authentik-auth`` app
+#: plugin is used. When set, requests from a trusted proxy must also carry a
+#: matching value in that header, providing an additional layer of defence
+#: beyond source-IP/CIDR checks. When unset, only the source-IP/CIDR check
+#: applies. (default: ``None``)
+MLFLOW_AUTHENTIK_SHARED_SECRET = _EnvironmentVariable("MLFLOW_AUTHENTIK_SHARED_SECRET", str, None)
+
+#: Name of the HTTP request header that carries the optional shared secret
+#: checked by the ``authentik-auth`` app plugin. (default:
+#: ``"X-authentik-proxy-secret"``)
+MLFLOW_AUTHENTIK_SHARED_SECRET_HEADER = _EnvironmentVariable(
+    "MLFLOW_AUTHENTIK_SHARED_SECRET_HEADER", str, "X-authentik-proxy-secret"
+)
+
+#: Group-name prefix expected in the ``X-authentik-groups`` header for users
+#: authenticating via the ``authentik-auth`` app plugin. Groups whose names
+#: do not start with this prefix are ignored. If no prefixed group is
+#: present, the user is denied (403). The remaining portion of the group
+#: name (after the prefix) selects the local MLflow role. (default:
+#: ``"mlflow-"``)
+MLFLOW_AUTHENTIK_GROUP_PREFIX = _EnvironmentVariable(
+    "MLFLOW_AUTHENTIK_GROUP_PREFIX", str, "mlflow-"
+)

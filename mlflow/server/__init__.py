@@ -460,7 +460,7 @@ def _run_server(
                 "Errors will be surfaced at job invocation time."
             )
 
-    if app_name == "basic-auth" and job_execution_enabled:
+    if app_name in ("basic-auth", "authentik-auth") and job_execution_enabled:
         # Generate the token here (before forking uvicorn workers) so that all
         # worker processes and job subprocesses share the same token.
         env_map[_MLFLOW_INTERNAL_GATEWAY_AUTH_TOKEN.name] = secrets.token_hex(32)

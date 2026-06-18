@@ -109,9 +109,11 @@ mlflow = "mlflow.cli:cli"
 
 [project.entry-points."mlflow.app"]
 basic-auth = "mlflow.server.auth:create_app"
+authentik-auth = "mlflow.server.auth.authentik_proxy:create_app"
 
 [project.entry-points."mlflow.app.client"]
 basic-auth = "mlflow.server.auth.client:AuthServiceClient"
+authentik-auth = "mlflow.server.auth.client:AuthServiceClient"
 
 [project.entry-points."mlflow.deployments"]
 databricks = "mlflow.deployments.databricks"

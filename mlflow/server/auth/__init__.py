@@ -4431,7 +4431,9 @@ def _find_fastapi_validator(path: str) -> Callable[[str, StarletteRequest], Awai
     return None
 
 
-def add_fastapi_permission_middleware(app: FastAPI) -> None:
+def add_fastapi_permission_middleware(
+    app: FastAPI, auth_func: Callable[[StarletteRequest], User | None] | None = None
+) -> None:
     """
     Add permission middleware to FastAPI app for routes not handled by Flask.
 
@@ -4441,14 +4443,22 @@ def add_fastapi_permission_middleware(app: FastAPI) -> None:
 
     1. Skip unprotected routes
     2. Find the appropriate validator for the route
-    3. Reject if custom authorization_function is configured (not supported for FastAPI routes)
+    3. Reject if the default basic-auth path is used together with a custom
+       ``authorization_function`` (not supported for FastAPI routes). The guard
+       is intentionally skipped when a custom ``auth_func`` is provided.
     4. Authenticate the request
     5. Allow admins full access
     6. Run the validator
 
     Args:
         app: The FastAPI application instance.
+        auth_func: Optional custom FastAPI request authenticator returning a
+            ``User`` on success or ``None`` on failure. When ``None`` the
+            built-in basic-auth ``_authenticate_fastapi_request`` is used.
     """
+
+    if auth_func is None:
+        auth_func = _authenticate_fastapi_request
 
     @app.middleware("http")
     async def fastapi_permission_middleware(request, call_next):
@@ -4463,8 +4473,13 @@ def add_fastapi_permission_middleware(app: FastAPI) -> None:
         if validator is None:
             return await call_next(request)
 
-        # Check for custom authorization_function (only affects routes with validators)
-        if auth_config.authorization_function != DEFAULT_AUTHORIZATION_FUNCTION:
+        # Check for custom authorization_function (only affects routes with
+        # validators, and only on the default basic-auth FastAPI path; custom
+        # auth_func callers bypass this guard by design).
+        if (
+            auth_func is _authenticate_fastapi_request
+            and auth_config.authorization_function != DEFAULT_AUTHORIZATION_FUNCTION
+        ):
             return PlainTextResponse(
                 f"Custom authorization_function '{auth_config.authorization_function}' is not "
                 f"supported for FastAPI routes (e.g., /gateway/ endpoints). Only the default "
@@ -4474,7 +4489,7 @@ def add_fastapi_permission_middleware(app: FastAPI) -> None:
             )
 
         # Authenticate user
-        user = _authenticate_fastapi_request(request)
+        user = auth_func(request)
         if user is None:
             return PlainTextResponse(
                 "You are not authenticated. Please see "
@@ -4533,17 +4548,42 @@ _RBAC_ROUTES: list[tuple[Callable[[], Any], str, str, str]] = [
 ]
 
 
-def create_app(app: Flask = app):
+def create_app(
+    app: Flask = app,
+    *,
+    register_signup_ui: bool = True,
+    authorization_function: str | None = None,
+    fastapi_auth_func: Callable[[StarletteRequest], User | None] | None = None,
+):
     """
     A factory to enable authentication and authorization for the MLflow server.
 
     Args:
         app: The Flask app to enable authentication and authorization for.
+        register_signup_ui: When ``False``, do not register the native
+            ``/signup`` form or the ``CREATE_USER_UI`` browser route. This is
+            used by auth plugins that authenticate via an external IdP and do
+            not need a local signup UI. Defaults to ``True`` to preserve the
+            historical basic-auth behaviour.
+        authorization_function: Optional ``"module.submodule:func"`` string
+            identifying a Flask authorization function to use in place of the
+            function configured in ``basic_auth.ini``. When provided the
+            module-global ``auth_config.authorization_function`` is swapped
+            and the ``get_auth_func`` lru-cache is cleared so subsequent
+            ``authenticate_request()`` calls dispatch to the supplied
+            function. When ``None`` the ini-configured function is kept
+            (default — preserves the basic-auth behaviour).
+        fastapi_auth_func: Optional custom FastAPI request authenticator
+            (returning ``User`` on success, ``None`` on failure) used by
+            ``add_fastapi_permission_middleware``. When ``None`` the built-in
+            basic-auth fastapi function is used (default — preserves the
+            basic-auth behaviour).
 
     Returns:
         The app with authentication and authorization enabled.
     """
     global _auth_initialized
+    global auth_config
 
     _logger.warning(
         "This feature is still experimental and may change in a future release without warning"
@@ -4580,16 +4620,25 @@ def create_app(app: Flask = app):
 
     _auth_initialized = True
 
-    app.add_url_rule(
-        rule=SIGNUP,
-        view_func=signup,
-        methods=["GET"],
-    )
-    app.add_url_rule(
-        rule=CREATE_USER_UI,
-        view_func=lambda: create_user_ui(csrf),
-        methods=["POST"],
-    )
+    if authorization_function is not None:
+        # Swap the module-global ``auth_config`` so ``authenticate_request``
+        # dispatches to the supplied authorization function. Clearing the
+        # ``get_auth_func`` lru-cache ensures the new function name is
+        # resolved on the next call.
+        auth_config = auth_config._replace(authorization_function=authorization_function)
+        get_auth_func.cache_clear()
+
+    if register_signup_ui:
+        app.add_url_rule(
+            rule=SIGNUP,
+            view_func=signup,
+            methods=["GET"],
+        )
+        app.add_url_rule(
+            rule=CREATE_USER_UI,
+            view_func=lambda: create_user_ui(csrf),
+            methods=["POST"],
+        )
     for rule in [CREATE_USER, AJAX_CREATE_USER]:
         app.add_url_rule(
             rule=rule,
@@ -4654,7 +4703,7 @@ def create_app(app: Flask = app):
 
     if _MLFLOW_SGI_NAME.get() == "uvicorn":
         fastapi_app = create_fastapi_app(app)
-        add_fastapi_permission_middleware(fastapi_app)
+        add_fastapi_permission_middleware(fastapi_app, auth_func=fastapi_auth_func)
         return fastapi_app
     else:
         return app
