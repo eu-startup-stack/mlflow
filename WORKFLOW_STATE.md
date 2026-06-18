@@ -316,8 +316,12 @@ implementor (after debater sign-off).
   format --check` on all touched files → **5 files already formatted**.
 
 ### Commit hash and push result
-- Commit: _populated after Task 6 commit (see the `Next Agent` section)._
-- Push: _populated after Task 6 push._
+- Commit: `3e3ce107c54b11a1f8f629e9d4c40f72f944da63`
+  (`feat(auth): add Authentik proxy-header auth plugin (authentik-auth)`)
+  on `master`, signed off by `ask <deploy@code.reify.dk>` (DCO).
+- Push: `git push origin master` →
+  `To https://github.com/eu-startup-stack/mlflow.git
+     91bd50cb0..3e3ce107c  master -> master` (success).
 
 ## Next Agent
 tester (post-implementation review, then merge/test/exercise the new plugin
