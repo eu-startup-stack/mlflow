@@ -316,12 +316,43 @@ implementor (after debater sign-off).
   format --check` on all touched files → **5 files already formatted**.
 
 ### Commit hash and push result
-- Commit: `3e3ce107c54b11a1f8f629e9d4c40f72f944da63`
+- Commit 1: `3e3ce107c54b11a1f8f629e9d4c40f72f944da63`
   (`feat(auth): add Authentik proxy-header auth plugin (authentik-auth)`)
   on `master`, signed off by `ask <deploy@code.reify.dk>` (DCO).
-- Push: `git push origin master` →
-  `To https://github.com/eu-startup-stack/mlflow.git
-     91bd50cb0..3e3ce107c  master -> master` (success).
+- Commit 2: `61094fab756c3c83dc83f8d68638e427d8730652`
+  (`docs(workflow): record Authentik commit hash + push result`) — placeholder
+  pop in WORKFLOW_STATE.md.
+- Commit 3: `ceb99c122…` (`fix(auth): self-heal stale managed-role permissions
+  + quality cleanups`) — review follow-up:
+  - `_ensure_managed_role` now self-heals a pre-existing managed role whose
+    `("workspace", "*")` permission row carries the wrong level (e.g. an
+    operator pre-created the role with MANAGE when the plugin would have used
+    USE).  The wrong row is updated in place via `update_role_permission`
+    instead of silently being left untouched.  A new test
+    `TestReconciliation.test_existing_managed_role_wrong_permission_is_corrected`
+    locks the behaviour in.
+  - `error_code` checks use `ErrorCode.Name(RESOURCE_ALREADY_EXISTS)` instead
+    of a hard-coded string literal (matches the rest of `mlflow.server.auth`).
+  - `base64` moved to top-level imports (was lazy in the FastAPI auth fn).
+  - `authenticate_request_authentik_proxy` return type tightened to
+    `Authorization | Response`.
+  - **Reviewer feedback that was deliberately *not* applied** (documented
+    decisions, not bugs):
+    * Reviewer 1 BLOCKER: "fail closed on reconciliation failures".  The
+      Task Brief 4 design is explicit: *"Catch MlflowException per-op, log,
+      and continue (partial failure self-heals next request)"*.  The
+      implementation matches the brief; changing it now would deviate
+      from the agreed design.  See the new code comments at
+      `_jit_provision_and_reconcile` for the rationale.
+    * Reviewer 1 MAJOR: "FastAPI should return 403 for no-prefixed-group,
+      not 401".  The Task Brief 4 design is explicit: the FastAPI
+      authenticator returns `User | None` and the existing
+      `add_fastapi_permission_middleware` converts `None` to 401.  This
+      is a deliberate divergence from the Flask path's 403; both paths
+      prevent provisioning and reject the request, but they use the
+      standard HTTP semantics (`401` = unauthenticated, `403` =
+      authenticated-but-forbidden) appropriate to each layer.
+- Push: each commit pushed to `origin master` successfully.
 
 ## Next Agent
 tester (post-implementation review, then merge/test/exercise the new plugin
